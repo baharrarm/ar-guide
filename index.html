@@ -323,13 +323,35 @@ function setupThree(){
 
   // Load mascot
   const loader = new GLTFLoader();
-  loader.load(CHARACTER_URL,(gltf)=>{
-    mascot = gltf.scene; mascot.scale.set(0.5,0.5,0.5); mascot.position.set(0,0,-0.6);
-    mascot.traverse(o=>{ if(o.isMesh){ o.castShadow=o.receiveShadow=true; } });
-    mascot.add(arrow);
-    scene.add(mascot);
-    if(gltf.animations?.length){ mixer=new THREE.AnimationMixer(mascot); mixer.clipAction(gltf.animations[0]).play(); }
-  });
+  loader.load(
+    CHARACTER_URL,
+    (gltf) => {
+      mascot = gltf.scene;
+      mascot.scale.set(0.5, 0.5, 0.5);
+      mascot.position.set(0, 0, -0.6);
+      mascot.traverse(o => { if (o.isMesh) { o.castShadow = o.receiveShadow = true; } });
+      mascot.add(arrow);
+      scene.add(mascot);
+      if (gltf.animations?.length) {
+        mixer = new THREE.AnimationMixer(mascot);
+        mixer.clipAction(gltf.animations[0]).play();
+      }
+    },
+    undefined,
+    (err) => {
+      console.warn("Mascot GLB failed to load; using fallback.", err);
+      // Fallback mascot: just a little sphere + the arrow so the app still works
+      const body = new THREE.Mesh(
+        new THREE.SphereGeometry(0.12, 24, 24),
+        new THREE.MeshStandardMaterial({ metalness: 0.1, roughness: 0.6 })
+      );
+      body.position.set(0, 0.12, -0.6);
+      body.add(arrow);
+      scene.add(body);
+      mascot = body;
+    }
+  );
+
 
   // AR Button (if available)
   if (navigator.xr){
@@ -461,6 +483,7 @@ init();
 </script>
 </body>
 </html>
+
 
 
 
