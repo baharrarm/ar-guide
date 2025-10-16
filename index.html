@@ -28,7 +28,28 @@
   .qrBox{border:1px dashed #2b3d76;border-radius:.8rem;padding:.75rem;display:flex;flex-direction:column;gap:.5rem;align-items:center;justify-content:center}
   .qrBox canvas{background:#fff;border-radius:.5rem}
   a{color:var(--accent);text-decoration:none}a:hover{text-decoration:underline}
+    /* Make the WebXR canvas fill the screen and sit at the back */
+  canvas.webxr-canvas {
+    position: fixed !important;
+    inset: 0 !important;
+    width: 100vw !important;
+    height: 100vh !important;
+    z-index: 0 !important;
+    display: block !important;
+  }
+  
+  /* When AR is active, hide the static page chrome */
+  body.ar-active header,
+  body.ar-active main { display: none !important; }
+  
+  /* Keep the HUD above AR */
+  .hud { z-index: 2; }
+  
+  /* During AR, don’t let a solid page background cover the camera */
+  body.ar-active { background: transparent !important; }
+
 </style>
+
 </head>
 <body>
 <header>
@@ -307,6 +328,8 @@ let arSupported = false;
 
 async function setupThree(){
   renderer = new THREE.WebGLRenderer({antialias:true,alpha:true});
+  renderer.domElement.classList.add('webxr-canvas');
+  renderer.autoClear = true; // default, but explicit is fine
   renderer.setPixelRatio(devicePixelRatio);
   renderer.setSize(innerWidth,innerHeight);
   renderer.xr.enabled = true;
@@ -390,6 +413,12 @@ async function setupARButtonOrFallback() {
       });
       renderer.xr.setReferenceSpaceType('local'); // XRViewer-friendly
       await renderer.xr.setSession(session);
+      document.body.classList.add('ar-active');   // <— hide UI, make bg transparent
+
+      // on session end:
+      session.addEventListener('end', () => {
+        document.body.classList.remove('ar-active');
+      });
 
       setStatus(xrStatusEl, "running", "ok");
       arMode.style.display = "";
@@ -416,6 +445,12 @@ async function setupARButtonOrFallback() {
   renderer.xr.addEventListener("sessionend",()=>{
     setStatus(xrStatusEl,"ended","warn");
     compassPanel.style.display = ""; compassMode.style.display=""; arMode.style.display="none";
+  });
+  renderer.xr.addEventListener('sessionstart', () => {
+    document.body.classList.add('ar-active');
+  });
+  renderer.xr.addEventListener('sessionend', () => {
+    document.body.classList.remove('ar-active');
   });
 
   addEventListener("resize",()=>renderer.setSize(innerWidth,innerHeight));
@@ -525,6 +560,7 @@ init();
 </script>
 </body>
 </html>
+
 
 
 
