@@ -1,0 +1,455 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+<title>AR Trail Guide — QR to AR Mascot</title>
+<style>
+  :root{--bg:#0b1020;--fg:#eaf2ff;--muted:#9fb3d1;--accent:#84d0ff;}
+  html,body{margin:0;height:100%;background:var(--bg);color:var(--fg);font-family:ui-sans-serif,system-ui,Segoe UI,Roboto,Helvetica,Arial}
+  header{padding:1rem 1.25rem;border-bottom:1px solid #101a33;display:flex;gap:.7rem;align-items:center;flex-wrap:wrap}
+  header h1{margin:0;font-size:1.05rem;letter-spacing:.2px}
+  .pill{background:var(--accent);color:#001229;border-radius:999px;padding:.25rem .6rem;font-weight:700;font-size:.8rem}
+  main{padding:1rem 1.25rem;max-width:980px;margin:0 auto;display:grid;gap:.8rem}
+  .row{display:flex;flex-wrap:wrap;gap:.5rem .75rem;align-items:center}
+  .card{border:1px solid #17295e;background:#0f1833;border-radius:1rem;padding:1rem}
+  select,button,input{background:#0f1833;color:var(--fg);border:1px solid #1c2b57;border-radius:.6rem;padding:.55rem .7rem;font-size:.95rem}
+  button{cursor:pointer}button:disabled{opacity:.55;cursor:not-allowed}
+  .tip{color:var(--muted);font-size:.9rem}
+  .small{font-size:.8rem}
+  .hidden{display:none!important}
+  .hud{position:fixed;inset:auto 0 0 0;padding:.75rem 1rem;display:flex;gap:.6rem;flex-wrap:wrap;align-items:center;background:linear-gradient(180deg,rgba(11,16,32,0) 0%,rgba(11,16,32,.85) 20%,rgba(11,16,32,.95) 100%);backdrop-filter:blur(6px);border-top:1px solid #0c1735}
+  .tag{font-size:.8rem;color:var(--muted);background:#0f1833;border:1px solid #1c2b57;border-radius:.5rem;padding:.25rem .5rem}
+  .ok{color:#95e78b}.warn{color:#ffd38a}.err{color:#ff9da4}
+  #videoScanner{width:280px;height:auto;border-radius:.75rem;border:1px dashed #2b3d76}
+  #compassPanel{position:fixed;inset:auto 0 84px 0;padding:.6rem 1rem;display:none}
+  #compassArrow{font-size:2.4rem;line-height:1}
+  #qrGrid{display:grid;grid-template-columns:repeat(auto-fit,minmax(190px,1fr));gap:1rem;margin-top:.75rem}
+  .qrBox{border:1px dashed #2b3d76;border-radius:.8rem;padding:.75rem;display:flex;flex-direction:column;gap:.5rem;align-items:center;justify-content:center}
+  .qrBox canvas{background:#fff;border-radius:.5rem}
+  a{color:var(--accent);text-decoration:none}a:hover{text-decoration:underline}
+</style>
+</head>
+<body>
+<header>
+  <span class="pill">AR</span>
+  <h1>QR → AR Trail Guide</h1>
+</header>
+
+<main>
+  <div class="card">
+    <div class="row">
+      <label for="pathSelect">Route:</label>
+      <select id="pathSelect">
+        <option value="culture">Culture Trail</option>
+        <option value="food">Food Trail</option>
+        <option value="routine">Like-Your-Routine</option>
+        <option value="custom">Custom (from QR)</option>
+      </select>
+
+      <button id="scanBtn">Scan QR</button>
+      <video id="videoScanner" class="hidden" playsinline></video>
+
+      <button id="enterAR" disabled>Enter AR</button>
+      <button id="voiceBtn">🔊 Voice On/Off</button>
+    </div>
+    <p class="tip">Each printed QR simply opens this page with a different <code>?path=…</code>. Example: <code>?path=culture</code>.</p>
+    <p class="tip small">If AR isn’t available, the app shows a big compass arrow + distance so users can still follow the mascot directionally.</p>
+  </div>
+
+  <!-- Admin QR generator (enable via ?admin=1) -->
+  <div id="adminCard" class="card hidden">
+    <b>Admin — Make printable QR codes</b>
+    <div class="row small">
+      Base URL: <input id="baseUrl" style="min-width:280px" />
+      <button id="makeQrs">Generate</button>
+      <button id="downloadAll">Download PNGs</button>
+    </div>
+    <div id="qrGrid"></div>
+    <p class="tip small">Tip: print each QR with a label “Scan for Food Trail”, “Scan for Culture Trail”, etc.</p>
+  </div>
+
+  <div class="card small">
+    <b>How it works</b>
+    <ol>
+      <li>Scan a QR (or pick a route) → the app loads its list of stops (GPS waypoints).</li>
+      <li>Tap <b>Enter AR</b> to see the mascot. Face the mascot and follow the arrow/voice to the next stop.</li>
+      <li>When you’re inside <code>ARRIVAL_RADIUS_M</code>, it advances to the next stop and so on.</li>
+    </ol>
+    <p class="tip">Replace sample waypoints in the code (search for <code>WAYPOINTS</code>) with your real coordinates.</p>
+  </div>
+</main>
+
+<div class="hud small" id="hud">
+  <span class="tag">GPS: <span id="gpsStatus" class="warn">requesting</span></span>
+  <span class="tag">AR: <span id="xrStatus" class="warn">not started</span></span>
+  <span class="tag">Route: <span id="routeName">culture</span></span>
+  <span class="tag">Leg: <span id="legIndex">1</span>/<span id="legTotal">?</span></span>
+  <span class="tag">Bearing <span id="bearing">–</span>°</span>
+  <span class="tag">Dist <span id="distance">–</span> m</span>
+  <span class="tag" id="compassMode" style="display:none">Compass mode</span>
+  <span class="tag" id="arMode" style="display:none">AR mode</span>
+  <span class="tip" id="tipText">Move phone slowly to detect surfaces.</span>
+</div>
+
+<div id="compassPanel" class="card">
+  <div class="row" style="justify-content:space-between;align-items:center">
+    <div>
+      <div class="small">Fallback</div>
+      <div><b>Turn to face the arrow, then walk.</b></div>
+    </div>
+    <div id="compassArrow">⬆️</div>
+  </div>
+</div>
+
+<!-- ====== Scripts (Three.js, AR, QR) ====== -->
+<script type="module">
+import * as THREE from "https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.module.js";
+import { ARButton } from "https://cdn.jsdelivr.net/npm/three@0.160.0/examples/jsm/webxr/ARButton.js";
+import { GLTFLoader } from "https://cdn.jsdelivr.net/npm/three@0.160.0/examples/jsm/loaders/GLTFLoader.js";
+</script>
+<script src="https://cdn.jsdelivr.net/npm/qrcode@1.5.3/build/qrcode.min.js"></script>
+<script type="module">
+/*** ------------------- CONFIG ------------------- ***/
+// Replace with your real GPS paths
+const WAYPOINTS = {
+  culture: [
+    { lat:-27.4698, lon:153.0251, name:"Gallery" },
+    { lat:-27.4705, lon:153.0239, name:"Theatre" },
+    { lat:-27.4712, lon:153.0228, name:"Museum" },
+  ],
+  food: [
+    { lat:-27.4692, lon:153.0260, name:"Eat 1" },
+    { lat:-27.4685, lon:153.0272, name:"Eat 2" },
+    { lat:-27.4679, lon:153.0284, name:"Eat 3" },
+  ],
+  routine: [
+    { lat:-27.4688, lon:153.0253, name:"Spot A" },
+    { lat:-27.4681, lon:153.0241, name:"Spot B" },
+  ],
+};
+// If you want QRs to embed a full custom path as JSON, set ?path=custom&data=<base64json> (advanced).
+
+const CHARACTER_URL =
+  "https://rawcdn.githack.com/KhronosGroup/glTF-Sample-Models/6cd4be3e0a2b49b0a07f0c207420a835f9aab0e6/2.0/RobotExpressive/glTF-Binary/RobotExpressive.glb";
+
+const ARRIVAL_RADIUS_M = 25; // meters
+let voiceEnabled = true;
+let voiceLang = "en-US";
+
+/*** ------------------- DOM ------------------- ***/
+const pathSelect  = document.getElementById("pathSelect");
+const scanBtn     = document.getElementById("scanBtn");
+const videoEl     = document.getElementById("videoScanner");
+const enterARBtn  = document.getElementById("enterAR");
+const voiceBtn    = document.getElementById("voiceBtn");
+
+const gpsStatusEl = document.getElementById("gpsStatus");
+const xrStatusEl  = document.getElementById("xrStatus");
+const routeNameEl = document.getElementById("routeName");
+const legIndexEl  = document.getElementById("legIndex");
+const legTotalEl  = document.getElementById("legTotal");
+const bearingEl   = document.getElementById("bearing");
+const distanceEl  = document.getElementById("distance");
+const tipTextEl   = document.getElementById("tipText");
+
+const compassPanel = document.getElementById("compassPanel");
+const compassArrow = document.getElementById("compassArrow");
+const compassMode  = document.getElementById("compassMode");
+const arMode       = document.getElementById("arMode");
+
+const adminCard  = document.getElementById("adminCard");
+const baseUrlInp = document.getElementById("baseUrl");
+const makeQrsBtn = document.getElementById("makeQrs");
+const qrGrid     = document.getElementById("qrGrid");
+const dlAllBtn   = document.getElementById("downloadAll");
+
+/*** ------------------- UTIL ------------------- ***/
+function qs(name, fallback=null){
+  const u = new URL(location.href); return u.searchParams.get(name) ?? fallback;
+}
+function setStatus(el, text, cls){ el.textContent = text; el.className = cls ?? ""; }
+function speak(text){
+  if (!voiceEnabled || !("speechSynthesis" in window)) return;
+  const u = new SpeechSynthesisUtterance(text);
+  u.lang = voiceLang; u.rate=1.0; u.pitch=1.0;
+  speechSynthesis.cancel(); speechSynthesis.speak(u);
+}
+const toRad = d => d*Math.PI/180, toDeg = r => r*180/Math.PI;
+function distanceMeters(lat1,lon1,lat2,lon2){
+  const R=6371000, dLat=toRad(lat2-lat1), dLon=toRad(lon2-lon1);
+  const a = Math.sin(dLat/2)**2 + Math.cos(toRad(lat1))*Math.cos(toRad(lat2))*Math.sin(dLon/2)**2;
+  return 2*R*Math.asin(Math.sqrt(a));
+}
+function bearingDeg(lat1,lon1,lat2,lon2){
+  const y = Math.sin(toRad(lon2-lon1))*Math.cos(toRad(lat2));
+  const x = Math.cos(toRad(lat1))*Math.sin(toRad(lat2)) - Math.sin(toRad(lat1))*Math.cos(toRad(lat2))*Math.cos(toRad(lon2-lon1));
+  return (toDeg(Math.atan2(y,x))+360)%360;
+}
+function clampAz(d){ const x=((d%360)+360)%360; return x; } // 0..359
+
+/*** ------------------- GEO ------------------- ***/
+let watchId=null; let userLat=null,userLon=null; let userHeading=null;
+
+function startGPS(){
+  if(!navigator.geolocation){ setStatus(gpsStatusEl,"unavailable","err"); return; }
+  watchId = navigator.geolocation.watchPosition(
+    pos=>{
+      userLat=pos.coords.latitude; userLon=pos.coords.longitude;
+      setStatus(gpsStatusEl,`ok (~${Math.round(pos.coords.accuracy)}m)`,"ok");
+      enterARBtn.disabled = false;
+    },
+    err=>{ setStatus(gpsStatusEl, err.message||"denied","err"); },
+    { enableHighAccuracy:true, maximumAge:1000, timeout:10000 }
+  );
+}
+
+// Compass (best-effort; iOS needs user gesture for permission)
+if (window.DeviceOrientationEvent && typeof DeviceOrientationEvent.requestPermission==="function"){
+  document.addEventListener("click", async function once(){
+    try{ await DeviceOrientationEvent.requestPermission(); }catch{}
+    window.addEventListener("deviceorientation",(ev)=>{
+      if(ev.webkitCompassHeading!=null){ userHeading = ev.webkitCompassHeading; }
+      else if(ev.alpha!=null){ userHeading = 360 - ev.alpha; }
+    },true);
+    document.removeEventListener("click", once);
+  });
+}else if (window.DeviceOrientationEvent){
+  window.addEventListener("deviceorientationabsolute", (ev)=>{
+    if(ev.alpha!=null) userHeading = 360 - ev.alpha;
+  });
+}
+
+/*** ------------------- ROUTES ------------------- ***/
+let currentKey="culture"; let currentRoute = WAYPOINTS[currentKey]; let legIndex=0;
+function loadRoute(key){
+  currentKey=key;
+  if (key==="custom"){
+    const data = qs("data",null);
+    if(data){
+      try { currentRoute = JSON.parse(atob(decodeURIComponent(data))); }
+      catch { currentRoute = []; }
+    } else { currentRoute = []; }
+  } else {
+    currentRoute = WAYPOINTS[key] ?? [];
+  }
+  legIndex=0;
+  routeNameEl.textContent = key;
+  legIndexEl.textContent = Math.min(1,currentRoute.length).toString();
+  legTotalEl.textContent = currentRoute.length.toString();
+  if(!currentRoute.length){
+    setStatus(tipTextEl,`No waypoints for "${key}". Add some!`,"warn");
+  }else{
+    setStatus(tipTextEl,`Loaded ${currentRoute.length} stops.`,"");
+    speak(`Loaded ${currentRoute.length} stops for ${key}.`);
+  }
+}
+function nextLeg(){
+  if(legIndex < currentRoute.length-1){
+    legIndex++; legIndexEl.textContent = (legIndex+1).toString();
+    const nm = currentRoute[legIndex].name ?? "next stop";
+    speak(`Proceed to ${nm}.`);
+  }else{
+    speak("You’ve arrived. Trail complete!");
+    setStatus(tipTextEl,"Trail complete. 🎉","ok");
+  }
+}
+
+/*** ------------------- QR SCAN ------------------- ***/
+let scanning=false, mediaStream=null;
+async function startScan(){
+  if(!("BarcodeDetector" in window)){
+    alert("BarcodeDetector not supported here. Use printed QR links (e.g., ?path=culture).");
+    return;
+  }
+  try{
+    mediaStream = await navigator.mediaDevices.getUserMedia({video:{facingMode:"environment"}});
+    videoEl.srcObject = mediaStream; await videoEl.play(); videoEl.classList.remove("hidden"); scanning=true;
+    const detector = new BarcodeDetector({formats:["qr_code","code_128","ean_13","upc_a"]});
+    (async function loop(){
+      if(!scanning) return;
+      try{
+        const bmp = await createImageBitmap(videoEl);
+        const codes = await detector.detect(bmp);
+        if (codes.length){
+          const raw = codes[0].rawValue||"";
+          if(/^https?:\/\//i.test(raw)){ location.href = raw; return; }
+          if(/path=/.test(raw)){
+            const u = new URL(location.href);
+            const k = raw.split("path=")[1].split("&")[0];
+            u.searchParams.set("path", k); location.href = u.toString(); return;
+          }
+          alert("Scanned: "+raw);
+        }
+      }catch{}
+      requestAnimationFrame(loop);
+    })();
+  }catch(e){ alert("Camera error: "+(e.message||e)); }
+}
+function stopScan(){
+  scanning=false; if(mediaStream) mediaStream.getTracks().forEach(t=>t.stop());
+  videoEl.classList.add("hidden");
+}
+
+/*** ------------------- AR + THREE ------------------- ***/
+let renderer, scene, camera, mixer=null, clock=new THREE.Clock(), mascot=null, arrow=null;
+let arSupported = false;
+
+function setupThree(){
+  renderer = new THREE.WebGLRenderer({antialias:true,alpha:true});
+  renderer.setPixelRatio(devicePixelRatio);
+  renderer.setSize(innerWidth,innerHeight);
+  renderer.xr.enabled = true;
+  document.body.appendChild(renderer.domElement);
+
+  scene = new THREE.Scene();
+  camera = new THREE.PerspectiveCamera();
+
+  scene.add(new THREE.HemisphereLight(0xffffff,0x111133,1.0));
+  const dir = new THREE.DirectionalLight(0xffffff,.8); dir.position.set(0,5,2); scene.add(dir);
+
+  // Arrow child mesh (points user toward next waypoint)
+  const cone = new THREE.ConeGeometry(0.05,0.15,24);
+  const mat  = new THREE.MeshStandardMaterial({metalness:.1,roughness:.6});
+  arrow = new THREE.Mesh(cone,mat); arrow.rotation.x = -Math.PI/2; arrow.position.set(0,0.25,0);
+
+  // Load mascot
+  const loader = new GLTFLoader();
+  loader.load(CHARACTER_URL,(gltf)=>{
+    mascot = gltf.scene; mascot.scale.set(0.5,0.5,0.5); mascot.position.set(0,0,-0.6);
+    mascot.traverse(o=>{ if(o.isMesh){ o.castShadow=o.receiveShadow=true; } });
+    mascot.add(arrow);
+    scene.add(mascot);
+    if(gltf.animations?.length){ mixer=new THREE.AnimationMixer(mascot); mixer.clipAction(gltf.animations[0]).play(); }
+  });
+
+  // AR Button (if available)
+  if (navigator.xr){
+    const btn = ARButton.createButton(renderer, { requiredFeatures:['hit-test'] });
+    btn.textContent = "Start AR";
+    enterARBtn.replaceWith(btn);
+    arSupported = true;
+    setStatus(xrStatusEl,"ready","ok");
+  } else {
+    setStatus(xrStatusEl,"WebXR not available","warn");
+    arSupported = false;
+  }
+
+  renderer.xr.addEventListener("sessionstart",()=>{
+    setStatus(xrStatusEl,"running","ok");
+    compassPanel.style.display = "none"; compassMode.style.display="none"; arMode.style.display="";
+    setStatus(tipTextEl,"Move phone to find a plane. Follow the arrow.","");
+    speak("AR started. Follow the arrow to your next stop.");
+  });
+  renderer.xr.addEventListener("sessionend",()=>{
+    setStatus(xrStatusEl,"ended","warn");
+    compassPanel.style.display = ""; compassMode.style.display=""; arMode.style.display="none";
+  });
+
+  addEventListener("resize",()=>renderer.setSize(innerWidth,innerHeight));
+  renderer.setAnimationLoop(onXRFrame);
+}
+
+function onXRFrame(){
+  const dt = clock.getDelta(); if(mixer) mixer.update(dt);
+
+  if(userLat!=null && userLon!=null && currentRoute?.length){
+    const wp = currentRoute[legIndex];
+    const dist = Math.round(distanceMeters(userLat,userLon,wp.lat,wp.lon));
+    const brg  = Math.round(bearingDeg(userLat,userLon,wp.lat,wp.lon));
+    distanceEl.textContent = dist; bearingEl.textContent = brg;
+
+    // Rotate arrow relative to camera yaw so it "points" toward the bearing
+    if(mascot){
+      const cam = renderer.xr?.getCamera?.(camera) || camera;
+      const yaw = new THREE.Euler().setFromQuaternion(cam.quaternion,"YXZ").y * 180/Math.PI;
+      const rel = THREE.MathUtils.degToRad(clampAz(brg - yaw));
+      mascot.rotation.y = rel;
+    }
+
+    // Compass fallback: point a big arrow emoji
+    if (!arSupported || !renderer.xr.isPresenting){
+      compassPanel.style.display = "";
+      compassMode.style.display = "";
+      arMode.style.display = "none";
+      // map bearing to the nearest arrow
+      const dirs = [
+        {d:0,c:"⬆️"},{d:45,c:"↗️"},{d:90,c:"➡️"},{d:135,c:"↘️"},
+        {d:180,c:"⬇️"},{d:225,c:"↙️"},{d:270,c:"⬅️"},{d:315,c:"↖️"}
+      ];
+      let best=dirs[0],min=999;
+      dirs.forEach(o=>{ const dif=Math.min(Math.abs(brg-o.d),360-Math.abs(brg-o.d)); if(dif<min){min=dif;best=o;} });
+      compassArrow.textContent = best.c + " " + brg + "°";
+    }
+
+    if (dist <= ARRIVAL_RADIUS_M){ nextLeg(); }
+  }
+
+  renderer.render(scene,camera);
+}
+
+/*** ------------------- INIT & UI ------------------- ***/
+function initFromQuery(){
+  const p = qs("path",null);
+  if(p){ pathSelect.value = WAYPOINTS[p] ? p : "custom"; }
+  loadRoute(pathSelect.value);
+
+  // Admin mode: quick QR maker
+  if (qs("admin","0")==="1"){
+    adminCard.classList.remove("hidden");
+    baseUrlInp.value = location.origin + location.pathname;
+  }
+}
+function init(){
+  startGPS(); setupThree(); initFromQuery();
+
+  pathSelect.addEventListener("change", ()=>{
+    const key=pathSelect.value; loadRoute(key);
+    const u=new URL(location.href); u.searchParams.set("path",key);
+    history.replaceState({}, "", u.toString());
+  });
+
+  voiceBtn.addEventListener("click", ()=>{
+    voiceEnabled=!voiceEnabled;
+    voiceBtn.textContent = voiceEnabled ? "🔊 Voice On" : "🔇 Voice Off";
+    if (voiceEnabled) speak("Voice guidance enabled.");
+  });
+
+  scanBtn.addEventListener("click", ()=>{
+    if(videoEl.classList.contains("hidden")) startScan(); else { stopScan(); }
+  });
+
+  // Admin QR gen
+  makeQrsBtn?.addEventListener("click", ()=>{
+    qrGrid.innerHTML = "";
+    const base = baseUrlInp.value || (location.origin+location.pathname);
+    const routes = ["culture","food","routine"];
+    routes.forEach(r=>{
+      const url = `${base}?path=${r}`;
+      const box = document.createElement("div"); box.className="qrBox";
+      const title = document.createElement("div"); title.textContent = `Route: ${r}`;
+      const canv = document.createElement("canvas");
+      QRCode.toCanvas(canv, url, { width:170 }, (err)=>{ if(err) console.error(err); });
+      const link = document.createElement("a"); link.href=url; link.textContent="Open link";
+      const copy = document.createElement("button"); copy.textContent="Copy URL"; copy.onclick=()=>navigator.clipboard.writeText(url);
+      const dl = document.createElement("button"); dl.textContent="Download PNG";
+      dl.onclick=()=>{
+        const a=document.createElement("a"); a.href=canv.toDataURL("image/png"); a.download=`qr-${r}.png`; a.click();
+      };
+      box.append(title,canv,link,copy,dl); qrGrid.append(box);
+    });
+  });
+
+  dlAllBtn?.addEventListener("click", ()=>{
+    document.querySelectorAll(".qrBox canvas").forEach((canv,i)=>{
+      const a=document.createElement("a"); a.href=canv.toDataURL("image/png"); a.download=`qr-${i+1}.png`; a.click();
+    });
+  });
+
+  // If AR is unsupported at load time, show compass panel
+  if (!navigator.xr){ compassPanel.style.display=""; compassMode.style.display=""; }
+}
+init();
+</script>
+</body>
+</html>
