@@ -321,16 +321,19 @@ function setupThree(){
   // Arrow child mesh (points user toward next waypoint)
   const cone = new THREE.ConeGeometry(0.05,0.15,24);
   const mat  = new THREE.MeshStandardMaterial({metalness:.1,roughness:.6});
-  arrow = new THREE.Mesh(cone,mat); arrow.rotation.x = -Math.PI/2; arrow.position.set(0,0.25,0);
+  arrow = new THREE.Mesh(cone,mat); arrow.rotation.x = -Math.PI/2; arrow.position.set(0,0.35,0);
+  arrow.scale.set(1, 1, 1.4);     
 
   // Load mascot
+  const MASCOT_SCALE = 0.22;      // was 0.5
+  const MASCOT_DISTANCE_Z = -1.2; // was -0.6 (move farther)
   const loader = new GLTFLoader();
   loader.load(
     CHARACTER_URL,
     (gltf) => {
       mascot = gltf.scene;
-      mascot.scale.set(0.5, 0.5, 0.5);
-      mascot.position.set(0, 0, -0.6);
+      mascot.scale.set(MASCOT_SCALE,MASCOT_SCALE,MASCOT_SCALE);
+      mascot.position.set(0, 0, MASCOT_DISTANCE_Z);
       mascot.traverse(o => { if (o.isMesh) { o.castShadow = o.receiveShadow = true; } });
       mascot.add(arrow);
       scene.add(mascot);
@@ -485,6 +488,7 @@ init();
 </script>
 </body>
 </html>
+
 
 
 
