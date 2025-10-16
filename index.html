@@ -315,6 +315,8 @@ function setupThree(){
   scene = new THREE.Scene();
   camera = new THREE.PerspectiveCamera();
 
+  await setupARButtonOrFallback();
+
   scene.add(new THREE.HemisphereLight(0xffffff,0x111133,1.0));
   const dir = new THREE.DirectionalLight(0xffffff,.8); dir.position.set(0,5,2); scene.add(dir);
 
@@ -359,16 +361,51 @@ function setupThree(){
 
 
   // AR Button (if available)
-  if (navigator.xr){
-    const btn = ARButton.createButton(renderer, { requiredFeatures:['hit-test'] });
-    btn.textContent = "Start AR";
-    enterARBtn.replaceWith(btn);
-    arSupported = true;
-    setStatus(xrStatusEl,"ready","ok");
-  } else {
-    setStatus(xrStatusEl,"WebXR not available","warn");
-    arSupported = false;
-  }
+  function fallbackToCompass() {
+  setStatus(xrStatusEl, "AR not supported", "warn");
+  arMode.style.display = "none";
+  compassMode.style.display = "";
+  compassPanel.style.display = "";
+  arSupported = false;
+}
+
+async function setupARButtonOrFallback() {
+  const canXR = !!(navigator.xr && navigator.xr.isSessionSupported);
+  let arOK = false;
+  try {
+    arOK = canXR && await navigator.xr.isSessionSupported('immersive-ar');
+  } catch {}
+
+  if (!arOK) return fallbackToCompass();
+
+  // Manual Start button (works in XRViewer)
+  enterARBtn.disabled = false;
+  enterARBtn.textContent = "Start AR";
+  enterARBtn.onclick = async () => {
+    try {
+      const session = await navigator.xr.requestSession('immersive-ar', {
+        requiredFeatures: ['hit-test'],
+        optionalFeatures: ['anchors', 'dom-overlay'],
+        domOverlay: { root: document.body }
+      });
+      renderer.xr.setReferenceSpaceType('local'); // XRViewer-friendly
+      await renderer.xr.setSession(session);
+
+      setStatus(xrStatusEl, "running", "ok");
+      arMode.style.display = "";
+      compassMode.style.display = "none";
+      compassPanel.style.display = "none";
+      arSupported = true;
+      speak("AR started. Follow the arrow to your next stop.");
+    } catch (e) {
+      console.warn("Failed to start AR:", e);
+      fallbackToCompass();
+    }
+  };
+
+  setStatus(xrStatusEl, "ready", "ok");
+}
+
 
   renderer.xr.addEventListener("sessionstart",()=>{
     setStatus(xrStatusEl,"running","ok");
@@ -488,6 +525,7 @@ init();
 </script>
 </body>
 </html>
+
 
 
 
