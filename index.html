@@ -305,7 +305,7 @@ function stopScan(){
 let renderer, scene, camera, mixer=null, clock=new THREE.Clock(), mascot=null, arrow=null;
 let arSupported = false;
 
-function setupThree(){
+async function setupThree(){
   renderer = new THREE.WebGLRenderer({antialias:true,alpha:true});
   renderer.setPixelRatio(devicePixelRatio);
   renderer.setSize(innerWidth,innerHeight);
@@ -525,6 +525,7 @@ init();
 </script>
 </body>
 </html>
+
 
 
 
