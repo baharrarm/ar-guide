@@ -106,18 +106,20 @@
 {
   "imports": {
     "three": "https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.module.js",
-    "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.160.0/examples/jsm/"
+    "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.160.0/examples/jsm/",
+    "qrcode": "https://cdn.jsdelivr.net/npm/qrcode@1.5.3/build/qrcode.esm.js"
   }
 }
 </script>
-<script src="https://cdn.jsdelivr.net/npm/qrcode@1.5.3/build/qrcode.min.js"></script>
 
 <script type="module">
 import * as THREE from "three";
 import { ARButton } from "three/addons/webxr/ARButton.js";
 import { GLTFLoader } from "three/addons/loaders/GLTFLoader.js";
+import QRCode from "qrcode";
 
 console.log("THREE", THREE.REVISION);
+console.log("QRCode import ok?", typeof QRCode);
 
 /*** ------------------- CONFIG ------------------- ***/
 // Replace with your real GPS paths
@@ -483,6 +485,7 @@ init();
 </script>
 </body>
 </html>
+
 
 
 
