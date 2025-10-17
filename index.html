@@ -346,10 +346,12 @@ async function setupThree(){
   const dir = new THREE.DirectionalLight(0xffffff,.8); dir.position.set(0,5,2); scene.add(dir);
 
   // Arrow child mesh (points user toward next waypoint)
-  const cone = new THREE.ConeGeometry(0.05,0.15,24);
-  const mat  = new THREE.MeshStandardMaterial({metalness:.1,roughness:.6});
-  arrow = new THREE.Mesh(cone,mat); arrow.rotation.x = -Math.PI/2; arrow.position.set(0,0.35,0);
-  arrow.scale.set(1, 1, 1.4);     
+  const arrowGeo = new THREE.ConeGeometry(0.06, 0.22, 32);
+    const arrowMat = new THREE.MeshBasicMaterial({ color: 0xffffff }); // unlit = always visible
+    arrow = new THREE.Mesh(arrowGeo, arrowMat);
+    arrow.rotation.x = -Math.PI / 2;
+    arrow.position.set(0, 0.38, 0);   // higher above mascot's "head"
+    arrow.visible = true; 
 
   // Load mascot
   const MASCOT_SCALE = 0.22;      // was 0.5
@@ -364,10 +366,15 @@ async function setupThree(){
       mascot.traverse(o => { if (o.isMesh) { o.castShadow = o.receiveShadow = true; } });
       mascot.add(arrow);
       scene.add(mascot);
-      if (gltf.animations?.length) {
+      if (gltf.animations && gltf.animations.length) {
         mixer = new THREE.AnimationMixer(mascot);
-        mixer.clipAction(gltf.animations[0]).play();
-      }
+        // Prefer the "Walk" clip; fall back to first available
+        const clips = gltf.animations;
+        const walk = THREE.AnimationClip.findByName(clips, "Walk") || clips[0];
+        const action = mixer.clipAction(walk);
+        action.reset().setLoop(THREE.LoopRepeat, Infinity).play();
+        }
+
     },
     undefined,
     (err) => {
@@ -467,6 +474,23 @@ function onXRFrame(){
     const wp = currentRoute[legIndex];
     const dist = Math.round(distanceMeters(userLat,userLon,wp.lat,wp.lon));
     const brg  = Math.round(bearingDeg(userLat,userLon,wp.lat,wp.lon));
+    if (mascot && renderer.xr.isPresenting) {
+        const cam = renderer.xr.getCamera(camera);
+
+        // Position mascot ~1.2m ahead of camera (smoothed)
+        const camPos = new THREE.Vector3();
+        cam.getWorldPosition(camPos);
+        const forward = new THREE.Vector3(0, 0, -1).applyQuaternion(cam.quaternion).normalize();
+        const desired = camPos.clone().add(forward.multiplyScalar(1.2)); // 1.2m ahead
+        mascot.position.lerp(desired, 0.25); // smooth follow
+
+        // Rotate mascot to face target bearing relative to camera yaw
+        const yawDeg = THREE.MathUtils.radToDeg(new THREE.Euler().setFromQuaternion(cam.quaternion, "YXZ").y);
+        const rel = THREE.MathUtils.degToRad(((brg - yawDeg) % 360 + 360) % 360);
+        // baseline face forward, then yaw to bearing:
+        mascot.quaternion.slerp(cam.quaternion, 0.08);
+        mascot.rotation.y = rel; // apply bearing offset around Y
+    }
     distanceEl.textContent = dist; bearingEl.textContent = brg;
 
     // Rotate arrow relative to camera yaw so it "points" toward the bearing
