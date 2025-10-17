@@ -29,24 +29,26 @@
   .qrBox canvas{background:#fff;border-radius:.5rem}
   a{color:var(--accent);text-decoration:none}a:hover{text-decoration:underline}
     /* Make the WebXR canvas fill the screen and sit at the back */
-  canvas.webxr-canvas {
+  canvas.webxr-canvas{
     position: fixed !important;
     inset: 0 !important;
     width: 100vw !important;
     height: 100vh !important;
+    display: none !important;          /* was block */
+    pointer-events: none !important;    /* don't steal clicks */
     z-index: 0 !important;
+    }
+  
+  body.ar-active canvas.webxr-canvas{
     display: block !important;
-  }
-  
-  /* When AR is active, hide the static page chrome */
-  body.ar-active header,
-  body.ar-active main { display: none !important; }
-  
-  /* Keep the HUD above AR */
-  .hud { z-index: 2; }
-  
-  /* During AR, don’t let a solid page background cover the camera */
-  body.ar-active { background: transparent !important; }
+    pointer-events: auto !important;
+    }
+
+    body.ar-active header,
+    body.ar-active main { display: none !important; }
+
+    .hud { z-index: 2; }
+    body.ar-active { background: transparent !important; }
 
 </style>
 
@@ -436,22 +438,23 @@ async function setupARButtonOrFallback() {
 }
 
 
-  renderer.xr.addEventListener("sessionstart",()=>{
+renderer.xr.addEventListener('sessionstart', () => {
+    document.body.classList.add('ar-active');   // shows canvas, hides cards
     setStatus(xrStatusEl,"running","ok");
-    compassPanel.style.display = "none"; compassMode.style.display="none"; arMode.style.display="";
+    compassPanel.style.display = "none";
+    compassMode.style.display="none";
+    arMode.style.display="";
     setStatus(tipTextEl,"Move phone to find a plane. Follow the arrow.","");
     speak("AR started. Follow the arrow to your next stop.");
-  });
-  renderer.xr.addEventListener("sessionend",()=>{
+});
+// when the session ends
+renderer.xr.addEventListener('sessionend', () => {
+    document.body.classList.remove('ar-active'); // hides canvas, cards clickable again
     setStatus(xrStatusEl,"ended","warn");
-    compassPanel.style.display = ""; compassMode.style.display=""; arMode.style.display="none";
-  });
-  renderer.xr.addEventListener('sessionstart', () => {
-    document.body.classList.add('ar-active');
-  });
-  renderer.xr.addEventListener('sessionend', () => {
-    document.body.classList.remove('ar-active');
-  });
+    compassPanel.style.display = "";
+    compassMode.style.display="";
+    arMode.style.display="none";
+});
 
   addEventListener("resize",()=>renderer.setSize(innerWidth,innerHeight));
   renderer.setAnimationLoop(onXRFrame);
@@ -560,6 +563,7 @@ init();
 </script>
 </body>
 </html>
+
 
 
 
