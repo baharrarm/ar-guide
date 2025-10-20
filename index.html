@@ -328,6 +328,21 @@ function stopScan(){
 let renderer, scene, camera, mixer=null, clock=new THREE.Clock(), mascot=null, arrow=null;
 let arSupported = false;
 
+// --- Lead-ahead placement (camera-relative) ---
+const LEAD_AHEAD_M       = 1.6;   // further away in front of camera
+const FOLLOW_SMOOTHING   = 0.25;  // 0..1 (higher = snappier)
+
+// --- Height handling so it sits low (not floating) ---
+const HEIGHT_OFFSET_M    = -1.35; // ~1.35m below camera height (typical phone eye height)
+const GROUND_MIN_Y       = 0.02;  // never go below this (a couple cm above "floor")
+
+// Manual direction offsets per path (degrees)
+const PATH_DIRECTION_OFFSET = {
+  culture: -90,   // point left
+  food: 90,       // point right
+  routine: 0      // straight ahead
+};
+
 async function setupThree(){
   renderer = new THREE.WebGLRenderer({antialias:true,alpha:true});
   renderer.domElement.classList.add('webxr-canvas');
@@ -356,24 +371,13 @@ async function setupThree(){
   arrow.renderOrder = 9999;           // draw on top of everything
 
 
-  // --- Lead-ahead placement (camera-relative) ---
-  const LEAD_AHEAD_M       = 1.6;   // further away in front of camera
-  const FOLLOW_SMOOTHING   = 0.25;  // 0..1 (higher = snappier)
-
-  // --- Height handling so it sits low (not floating) ---
-  const HEIGHT_OFFSET_M    = -1.35; // ~1.35m below camera height (typical phone eye height)
-  const GROUND_MIN_Y       = 0.02;  // never go below this (a couple cm above "floor")
+  
 
   // Load mascot
   const MASCOT_SCALE = 0.22;      // was 0.5
   const MASCOT_DISTANCE_Z = -1.2; // was -0.6 (move farther)
 
-  // Manual direction offsets per path (degrees)
-  const PATH_DIRECTION_OFFSET = {
-    culture: -90,   // point left
-    food: 90,       // point right
-    routine: 0      // straight ahead
-  };
+  
 
   const loader = new GLTFLoader();
   loader.load(
@@ -383,16 +387,20 @@ async function setupThree(){
       mascot.scale.set(MASCOT_SCALE,MASCOT_SCALE,MASCOT_SCALE);
       mascot.position.set(0, 0, MASCOT_DISTANCE_Z);
       mascot.traverse(o => { if (o.isMesh) { o.castShadow = o.receiveShadow = true; } });
+      
+      mascot.add(arrow);
       scene.add(mascot);
+
       if (gltf.animations && gltf.animations.length) {
-        mascot.add(arrow);
+        
         mixer = new THREE.AnimationMixer(mascot);
         // Prefer the "Walk" clip; fall back to first available
         const clips = gltf.animations;
         const walk = THREE.AnimationClip.findByName(clips, "Walk") || clips[0];
         const action = mixer.clipAction(walk);
         action.reset().setLoop(THREE.LoopRepeat, Infinity).play();
-        }
+      }
+      
 
     },
     undefined,
@@ -543,8 +551,6 @@ function onXRFrame(){
     if(mascot){
       const cam = renderer.xr?.getCamera?.(camera) || camera;
       const yaw = new THREE.Euler().setFromQuaternion(cam.quaternion,"YXZ").y * 180/Math.PI;
-      const rel = THREE.MathUtils.degToRad(clampAz(brg - yaw));
-      mascot.rotation.y = rel;
     }
 
     // Compass fallback: point a big arrow emoji
