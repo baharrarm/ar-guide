@@ -346,16 +346,35 @@ async function setupThree(){
   const dir = new THREE.DirectionalLight(0xffffff,.8); dir.position.set(0,5,2); scene.add(dir);
 
   // Arrow child mesh (points user toward next waypoint)
+  // Arrow: unlit (always bright) + draws on top
   const arrowGeo = new THREE.ConeGeometry(0.06, 0.22, 32);
-    const arrowMat = new THREE.MeshBasicMaterial({ color: 0xffffff }); // unlit = always visible
-    arrow = new THREE.Mesh(arrowGeo, arrowMat);
-    arrow.rotation.x = -Math.PI / 2;
-    arrow.position.set(0, 0.38, 0);   // higher above mascot's "head"
-    arrow.visible = true; 
+  const arrowMat = new THREE.MeshBasicMaterial({ color: 0xffffff, depthTest: false });
+  arrow = new THREE.Mesh(arrowGeo, arrowMat);
+  arrow.rotation.x = -Math.PI / 2;
+  arrow.position.set(0, 0.30, 0);     // sit just above mascot "head"
+  arrow.visible = true;
+  arrow.renderOrder = 9999;           // draw on top of everything
+
+
+  // --- Lead-ahead placement (camera-relative) ---
+  const LEAD_AHEAD_M       = 1.6;   // further away in front of camera
+  const FOLLOW_SMOOTHING   = 0.25;  // 0..1 (higher = snappier)
+
+  // --- Height handling so it sits low (not floating) ---
+  const HEIGHT_OFFSET_M    = -1.35; // ~1.35m below camera height (typical phone eye height)
+  const GROUND_MIN_Y       = 0.02;  // never go below this (a couple cm above "floor")
 
   // Load mascot
   const MASCOT_SCALE = 0.22;      // was 0.5
   const MASCOT_DISTANCE_Z = -1.2; // was -0.6 (move farther)
+
+  // Manual direction offsets per path (degrees)
+  const PATH_DIRECTION_OFFSET = {
+    culture: -90,   // point left
+    food: 90,       // point right
+    routine: 0      // straight ahead
+  };
+
   const loader = new GLTFLoader();
   loader.load(
     CHARACTER_URL,
@@ -364,9 +383,9 @@ async function setupThree(){
       mascot.scale.set(MASCOT_SCALE,MASCOT_SCALE,MASCOT_SCALE);
       mascot.position.set(0, 0, MASCOT_DISTANCE_Z);
       mascot.traverse(o => { if (o.isMesh) { o.castShadow = o.receiveShadow = true; } });
-      mascot.add(arrow);
       scene.add(mascot);
       if (gltf.animations && gltf.animations.length) {
+        mascot.add(arrow);
         mixer = new THREE.AnimationMixer(mascot);
         // Prefer the "Walk" clip; fall back to first available
         const clips = gltf.animations;
@@ -475,22 +494,49 @@ function onXRFrame(){
     const dist = Math.round(distanceMeters(userLat,userLon,wp.lat,wp.lon));
     const brg  = Math.round(bearingDeg(userLat,userLon,wp.lat,wp.lon));
     if (mascot && renderer.xr.isPresenting) {
-        const cam = renderer.xr.getCamera(camera);
+      const cam = renderer.xr.getCamera(camera);
 
-        // Position mascot ~1.2m ahead of camera (smoothed)
-        const camPos = new THREE.Vector3();
-        cam.getWorldPosition(camPos);
-        const forward = new THREE.Vector3(0, 0, -1).applyQuaternion(cam.quaternion).normalize();
-        const desired = camPos.clone().add(forward.multiplyScalar(1.2)); // 1.2m ahead
-        mascot.position.lerp(desired, 0.25); // smooth follow
+      // --- 1) Place the mascot ~LEAD_AHEAD_M in front, but low near ground ---
+      const camPos = new THREE.Vector3(); cam.getWorldPosition(camPos);
+      const forward = new THREE.Vector3(0, 0, -1).applyQuaternion(cam.quaternion).normalize();
 
-        // Rotate mascot to face target bearing relative to camera yaw
-        const yawDeg = THREE.MathUtils.radToDeg(new THREE.Euler().setFromQuaternion(cam.quaternion, "YXZ").y);
-        const rel = THREE.MathUtils.degToRad(((brg - yawDeg) % 360 + 360) % 360);
-        // baseline face forward, then yaw to bearing:
-        mascot.quaternion.slerp(cam.quaternion, 0.08);
-        mascot.rotation.y = rel; // apply bearing offset around Y
+      const desired = camPos.clone().add(forward.multiplyScalar(LEAD_AHEAD_M));
+      // put him low: camera height + negative offset, with a floor clamp
+      desired.y = Math.max(GROUND_MIN_Y, camPos.y + HEIGHT_OFFSET_M);
+
+      mascot.position.lerp(desired, FOLLOW_SMOOTHING);
+
+      // --- 2) Rotate mascot to point toward bearing (left/right/ahead cues) ---
+      // camera yaw (deg)
+      const camEuler = new THREE.Euler().setFromQuaternion(cam.quaternion, "YXZ");
+      const yawDeg   = THREE.MathUtils.radToDeg(camEuler.y);
+
+      // relative angle from where you're facing to the waypoint (0..360)
+      let relDeg = ((brg - yawDeg) % 360 + 360) % 360;
+      const relRad = THREE.MathUtils.degToRad(relDeg);
+
+      // Apply manual offset depending on current path
+      const offset = PATH_DIRECTION_OFFSET[currentKey] || 0;
+      mascot.rotation.set(0, camEuler.y, 0);
+      mascot.rotation.y += THREE.MathUtils.degToRad(offset);
+
+      // --- 3) Optional: simple left/right/ahead categories for debugging or UX ---
+      // 0 = ahead, 1 = right, 2 = behind, 3 = left
+      let dirLabel;
+      if (relDeg < 45 || relDeg >= 315)       dirLabel = "ahead";
+      else if (relDeg < 135)                  dirLabel = "right";
+      else if (relDeg < 225)                  dirLabel = "behind";
+      else                                    dirLabel = "left";
+
+      // You can also announce this via TTS or show in HUD if you want:
+      // tipTextEl.textContent = `Turn ${dirLabel}`;
+
+      // Arrow is attached to mascot and already points "forward" of the mascot,
+      // so no extra work is needed. Ensure it's visible:
+      arrow.visible = true;
     }
+
+
     distanceEl.textContent = dist; bearingEl.textContent = brg;
 
     // Rotate arrow relative to camera yaw so it "points" toward the bearing
