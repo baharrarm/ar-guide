@@ -197,6 +197,20 @@ const makeQrsBtn = document.getElementById("makeQrs");
 const qrGrid     = document.getElementById("qrGrid");
 const dlAllBtn   = document.getElementById("downloadAll");
 
+// World placement state
+let xrHitSource = null;
+let xrViewerSpace = null;
+let xrLocalSpace = null;
+let worldPlaced = false;     // becomes true after first placement
+let worldAnchor = null;      // if anchors supported
+let placed = false;
+let xrRefSpace = null;
+let hitTestSource = null;
+
+// simple reticle
+let reticle = null;
+
+
 /*** ------------------- UTIL ------------------- ***/
 function qs(name, fallback=null){
   const u = new URL(location.href); return u.searchParams.get(name) ?? fallback;
@@ -355,6 +369,15 @@ async function setupThree(){
   scene = new THREE.Scene();
   camera = new THREE.PerspectiveCamera();
 
+  // Reticle: a flat ring on the floor
+  const rGeo = new THREE.RingGeometry(0.08, 0.10, 32).rotateX(-Math.PI/2);
+  const rMat = new THREE.MeshBasicMaterial({ color: 0x84d0ff, transparent:true, opacity:0.9, depthTest:false });
+  reticle = new THREE.Mesh(rGeo, rMat);
+  reticle.matrixAutoUpdate = false;
+  reticle.visible = false;
+  scene.add(reticle);
+
+
   await setupARButtonOrFallback();
 
   scene.add(new THREE.HemisphereLight(0xffffff,0x111133,1.0));
@@ -374,8 +397,9 @@ async function setupThree(){
   
 
   // Load mascot
-  const MASCOT_SCALE = 0.22;      // was 0.5
-  const MASCOT_DISTANCE_Z = -1.2; // was -0.6 (move farther)
+  const MASCOT_SCALE = 0.16;      // was 0.5
+  const MASCOT_DISTANCE_Z = -3; // was -0.6 (move farther)
+  const FOOT_LIFT_M  = 0.03;
 
   
 
@@ -385,7 +409,7 @@ async function setupThree(){
     (gltf) => {
       mascot = gltf.scene;
       mascot.scale.set(MASCOT_SCALE,MASCOT_SCALE,MASCOT_SCALE);
-      mascot.position.set(0, 0, MASCOT_DISTANCE_Z);
+      // mascot.position.set(0, 0, MASCOT_DISTANCE_Z);
       mascot.traverse(o => { if (o.isMesh) { o.castShadow = o.receiveShadow = true; } });
       
       mascot.add(arrow);
@@ -447,8 +471,23 @@ async function setupARButtonOrFallback() {
         optionalFeatures: ['anchors', 'dom-overlay'],
         domOverlay: { root: document.body }
       });
+      
       renderer.xr.setReferenceSpaceType('local'); // XRViewer-friendly
       await renderer.xr.setSession(session);
+            // reference spaces for hit-test
+      xrRefSpace = renderer.xr.getReferenceSpace();
+      xrViewerSpace = await session.requestReferenceSpace('viewer');
+
+      // start a viewer-based hit test
+      hitTestSource = await session.requestHitTestSource({ space: xrViewerSpace });
+
+      // end cleanup
+      session.addEventListener('end', () => {
+        hitTestSource = null;
+        placed = false;
+        if (reticle) reticle.visible = false;
+      });
+
       document.body.classList.add('ar-active');   // <— hide UI, make bg transparent
 
       // on session end:
@@ -491,11 +530,26 @@ renderer.xr.addEventListener('sessionend', () => {
 });
 
   addEventListener("resize",()=>renderer.setSize(innerWidth,innerHeight));
-  renderer.setAnimationLoop(onXRFrame);
+  // renderer.setAnimationLoop(onXRFrame);
+  renderer.setAnimationLoop((t, frame) => onXRFrame(t, frame));
+
 }
 
-function onXRFrame(){
+function onXRFrame(time, frame){
   const dt = clock.getDelta(); if(mixer) mixer.update(dt);
+
+  // --- Hit test & reticle (only if not placed yet) ---
+  if (renderer.xr.isPresenting && frame && hitTestSource && !placed) {
+    const results = frame.getHitTestResults(hitTestSource);
+    if (results.length) {
+      const pose = results[0].getPose(xrRefSpace);
+      reticle.visible = true;
+      reticle.matrix.fromArray(pose.transform.matrix);
+    } else {
+      reticle.visible = false;
+    }
+  }
+
 
   if(userLat!=null && userLon!=null && currentRoute?.length){
     const wp = currentRoute[legIndex];
@@ -508,11 +562,11 @@ function onXRFrame(){
       const camPos = new THREE.Vector3(); cam.getWorldPosition(camPos);
       const forward = new THREE.Vector3(0, 0, -1).applyQuaternion(cam.quaternion).normalize();
 
-      const desired = camPos.clone().add(forward.multiplyScalar(LEAD_AHEAD_M));
+      // const desired = camPos.clone().add(forward.multiplyScalar(LEAD_AHEAD_M));
       // put him low: camera height + negative offset, with a floor clamp
       desired.y = Math.max(GROUND_MIN_Y, camPos.y + HEIGHT_OFFSET_M);
 
-      mascot.position.lerp(desired, FOLLOW_SMOOTHING);
+      // mascot.position.lerp(desired, FOLLOW_SMOOTHING);
 
       // --- 2) Rotate mascot to point toward bearing (left/right/ahead cues) ---
       // camera yaw (deg)
@@ -631,6 +685,26 @@ function init(){
       const a=document.createElement("a"); a.href=canv.toDataURL("image/png"); a.download=`qr-${i+1}.png`; a.click();
     });
   });
+
+  renderer.domElement.addEventListener('click', () => {
+    if (!renderer.xr.isPresenting) return;
+    if (!reticle || !reticle.visible) return;
+    if (!mascot) return;
+
+    // Put the mascot at the reticle pose (world-locked)
+    reticle.updateMatrixWorld(true);
+    const p = new THREE.Vector3().setFromMatrixPosition(reticle.matrixWorld);
+    mascot.position.copy(p);
+
+    // Ground the feet: shift model down so its bounding box touches y=0 at contact
+    const box = new THREE.Box3().setFromObject(mascot);
+    const footOffset = box.min.y; // if origin is mid-body, min.y > 0
+    mascot.position.y -= footOffset;  // drops it so feet sit on the plane
+
+    placed = true;            // stop reticle updates
+    reticle.visible = false;  // hide the ring after placement
+  });
+
 
   // If AR is unsupported at load time, show compass panel
   if (!navigator.xr){ compassPanel.style.display=""; compassMode.style.display=""; }
