@@ -343,12 +343,16 @@ let renderer, scene, camera, mixer=null, clock=new THREE.Clock(), mascot=null, a
 let arSupported = false;
 
 // --- Lead-ahead placement (camera-relative) ---
-const LEAD_AHEAD_M       = 1.6;   // further away in front of camera
-const FOLLOW_SMOOTHING   = 0.25;  // 0..1 (higher = snappier)
+const LEAD_AHEAD_M       = 4;   // further away in front of camera
+const FOLLOW_SMOOTHING   = 0.15;  // 0..1 (higher = snappier)
 
 // --- Height handling so it sits low (not floating) ---
-const HEIGHT_OFFSET_M    = -1.35; // ~1.35m below camera height (typical phone eye height)
+const HEIGHT_OFFSET_M    = -1.2; // ~1.35m below camera height (typical phone eye height)
 const GROUND_MIN_Y       = 0.02;  // never go below this (a couple cm above "floor")
+
+const MIN_SCALE         = 0.25;  // never too tiny
+const MAX_SCALE         = 0.60;  // never too large
+const SCALE_DIST_ANCHOR = 2.0;   // perceived size at ~2 m
 
 // Manual direction offsets per path (degrees)
 const PATH_DIRECTION_OFFSET = {
@@ -397,7 +401,7 @@ async function setupThree(){
   
 
   // Load mascot
-  const MASCOT_SCALE = 0.16;      // was 0.5
+  const MASCOT_SCALE = 0.35;      // was 0.5
   const MASCOT_DISTANCE_Z = -3; // was -0.6 (move farther)
   const FOOT_LIFT_M  = 0.03;
 
@@ -535,97 +539,93 @@ renderer.xr.addEventListener('sessionend', () => {
 
 }
 
-function onXRFrame(time, frame){
-  const dt = clock.getDelta(); if(mixer) mixer.update(dt);
+// Call this from renderer.setAnimationLoop(onXRFrame);
 
-  // --- Hit test & reticle (only if not placed yet) ---
-  if (renderer.xr.isPresenting && frame && hitTestSource && !placed) {
-    const results = frame.getHitTestResults(hitTestSource);
-    if (results.length) {
-      const pose = results[0].getPose(xrRefSpace);
-      reticle.visible = true;
-      reticle.matrix.fromArray(pose.transform.matrix);
-    } else {
-      reticle.visible = false;
-    }
+function onXRFrame(time, frame) {
+  // --- Pull XR/session bits safely ---
+  const session   = renderer.xr.getSession?.();
+  const refSpace  = renderer.xr.getReferenceSpace?.();
+  const cam       = renderer.xr.getCamera();
+
+  // Some browsers return null before first pose; render and bail gracefully.
+  if (!cam || !frame || !refSpace) {
+    renderer.render(scene, camera);
+    return;
   }
 
+  // Ensure tunables exist (use your globals if you already defined them)
+  const LEAD_AHEAD_M      = (typeof window.LEAD_AHEAD_M !== 'undefined') ? window.LEAD_AHEAD_M : 4.0;
+  const HEIGHT_OFFSET_M   = (typeof window.HEIGHT_OFFSET_M !== 'undefined') ? window.HEIGHT_OFFSET_M : -1.2;
+  const GROUND_MIN_Y      = (typeof window.GROUND_MIN_Y !== 'undefined') ? window.GROUND_MIN_Y : 0.02;
+  const FOLLOW_SMOOTHING  = (typeof window.FOLLOW_SMOOTHING !== 'undefined') ? window.FOLLOW_SMOOTHING : 0.15;
+  const MASCOT_SCALE      = (typeof window.MASCOT_SCALE !== 'undefined') ? window.MASCOT_SCALE : 0.35;
+  const MIN_SCALE         = (typeof window.MIN_SCALE !== 'undefined') ? window.MIN_SCALE : 0.25;
+  const MAX_SCALE         = (typeof window.MAX_SCALE !== 'undefined') ? window.MAX_SCALE : 0.60;
+  const SCALE_DIST_ANCHOR = (typeof window.SCALE_DIST_ANCHOR !== 'undefined') ? window.SCALE_DIST_ANCHOR : 2.0;
 
-  if(userLat!=null && userLon!=null && currentRoute?.length){
-    const wp = currentRoute[legIndex];
-    const dist = Math.round(distanceMeters(userLat,userLon,wp.lat,wp.lon));
-    const brg  = Math.round(bearingDeg(userLat,userLon,wp.lat,wp.lon));
-    if (mascot && renderer.xr.isPresenting) {
-      const cam = renderer.xr.getCamera(camera);
-
-      // --- 1) Place the mascot ~LEAD_AHEAD_M in front, but low near ground ---
-      const camPos = new THREE.Vector3(); cam.getWorldPosition(camPos);
-      const forward = new THREE.Vector3(0, 0, -1).applyQuaternion(cam.quaternion).normalize();
-
-      // const desired = camPos.clone().add(forward.multiplyScalar(LEAD_AHEAD_M));
-      // put him low: camera height + negative offset, with a floor clamp
-      // desired.y = Math.max(GROUND_MIN_Y, camPos.y + HEIGHT_OFFSET_M);
-
-      // mascot.position.lerp(desired, FOLLOW_SMOOTHING);
-
-      // --- 2) Rotate mascot to point toward bearing (left/right/ahead cues) ---
-      // camera yaw (deg)
-      const camEuler = new THREE.Euler().setFromQuaternion(cam.quaternion, "YXZ");
-      const yawDeg   = THREE.MathUtils.radToDeg(camEuler.y);
-
-      // relative angle from where you're facing to the waypoint (0..360)
-      let relDeg = ((brg - yawDeg) % 360 + 360) % 360;
-      const relRad = THREE.MathUtils.degToRad(relDeg);
-
-      // Apply manual offset depending on current path
-      const offset = PATH_DIRECTION_OFFSET[currentKey] || 0;
-      mascot.rotation.set(0, camEuler.y, 0);
-      mascot.rotation.y += THREE.MathUtils.degToRad(offset);
-
-      // --- 3) Optional: simple left/right/ahead categories for debugging or UX ---
-      // 0 = ahead, 1 = right, 2 = behind, 3 = left
-      let dirLabel;
-      if (relDeg < 45 || relDeg >= 315)       dirLabel = "ahead";
-      else if (relDeg < 135)                  dirLabel = "right";
-      else if (relDeg < 225)                  dirLabel = "behind";
-      else                                    dirLabel = "left";
-
-      // You can also announce this via TTS or show in HUD if you want:
-      // tipTextEl.textContent = `Turn ${dirLabel}`;
-
-      // Arrow is attached to mascot and already points "forward" of the mascot,
-      // so no extra work is needed. Ensure it's visible:
-      arrow.visible = true;
-    }
-
-
-    distanceEl.textContent = dist; bearingEl.textContent = brg;
-
-    // Rotate arrow relative to camera yaw so it "points" toward the bearing
-    if(mascot){
-      const cam = renderer.xr?.getCamera?.(camera) || camera;
-      const yaw = new THREE.Euler().setFromQuaternion(cam.quaternion,"YXZ").y * 180/Math.PI;
-    }
-
-    // Compass fallback: point a big arrow emoji
-    if (!arSupported || !renderer.xr.isPresenting){
-      compassPanel.style.display = "";
-      compassMode.style.display = "";
-      arMode.style.display = "none";
-      // map bearing to the nearest arrow
-      const dirs = [
-        {d:0,c:"⬆️"},{d:45,c:"↗️"},{d:90,c:"➡️"},{d:135,c:"↘️"},
-        {d:180,c:"⬇️"},{d:225,c:"↙️"},{d:270,c:"⬅️"},{d:315,c:"↖️"}
-      ];
-      let best=dirs[0],min=999;
-      dirs.forEach(o=>{ const dif=Math.min(Math.abs(brg-o.d),360-Math.abs(brg-o.d)); if(dif<min){min=dif;best=o;} });
-      compassArrow.textContent = best.c + " " + brg + "°";
-    }
-
-    if (dist <= ARRIVAL_RADIUS_M){ nextLeg(); }
+  // One-time base scale memo (in case model was loaded larger/smaller)
+  if (mascot && mascot.userData.baseScale == null) {
+    mascot.userData.baseScale = MASCOT_SCALE;
+    mascot.scale.setScalar(MASCOT_SCALE);
   }
 
-  renderer.render(scene,camera);
+  // --- Optional: update last known floor Y via hit-test if you already created one ---
+  // Expect a previously created 'window.xrHitTestSource' from requestHitTestSource / requestHitTestSourceForTransientInput
+  // We'll stash the last floor Y on a global or on mascot.userData to reuse when no hit result.
+  try {
+    if (window.xrHitTestSource && frame.getHitTestResults) {
+      const hits = frame.getHitTestResults(window.xrHitTestSource);
+      if (hits && hits.length) {
+        const hitPose = hits[0].getPose(refSpace);
+        if (hitPose) {
+          // smooth the floor a bit to avoid jitter
+          const y = hitPose.transform.position.y;
+          const prev = mascot.userData.lastFloorY ?? y;
+          mascot.userData.lastFloorY = THREE.MathUtils.lerp(prev, y, 0.2);
+        }
+      }
+    }
+  } catch (_) {
+    // ignore hit-test errors; we'll fall back to eye-height offset
+  }
+
+  // --- Camera world position & forward ---
+  const camPos  = new THREE.Vector3();
+  cam.getWorldPosition(camPos);
+
+  const forward = new THREE.Vector3(0, 0, -1)
+    .applyQuaternion(cam.quaternion)
+    .normalize();
+
+  // --- Desired target placement (further ahead, closer to ground) ---
+  const desired = camPos.clone().addScaledVector(forward, LEAD_AHEAD_M);
+
+  // Prefer floor Y if we have one; otherwise eye-height minus an offset
+  const floorY  = (mascot.userData && typeof mascot.userData.lastFloorY === 'number')
+    ? mascot.userData.lastFloorY + 0.02
+    : camPos.y + HEIGHT_OFFSET_M;
+
+  desired.y = Math.max(GROUND_MIN_Y, floorY);
+
+  // --- Smooth follow so it doesn't snap ---
+  mascot.position.lerp(desired, FOLLOW_SMOOTHING);
+
+  // --- Keep mascot upright and aligned to camera yaw (no pitch/roll) ---
+  // Derive yaw from camera world direction
+  const look = new THREE.Vector3();
+  cam.getWorldDirection(look);
+  const yaw = Math.atan2(look.x, look.z); // note: z-forward in three
+  const targetRot = new THREE.Quaternion().setFromEuler(new THREE.Euler(0, yaw, 0, 'YXZ'));
+  mascot.quaternion.slerp(targetRot, 0.2);
+
+  // --- Distance-based scaling (never too big/small) ---
+  const dist = Math.max(0.001, mascot.position.distanceTo(camPos));
+  const base = mascot.userData.baseScale ?? MASCOT_SCALE;
+  const s = THREE.MathUtils.clamp(base * (SCALE_DIST_ANCHOR / dist), MIN_SCALE, MAX_SCALE);
+  mascot.scale.setScalar(s);
+
+  // --- Render the frame ---
+  renderer.render(scene, cam);
 }
 
 /*** ------------------- INIT & UI ------------------- ***/
